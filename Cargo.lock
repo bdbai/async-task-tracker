@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "async-task-tracker"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "event-listener",
  "pin-project-lite",

@@ -1,6 +1,6 @@
 [package]
 name = "async-task-tracker"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2021"
 authors = ["bdbai <bdbaiapp@163.com>", "Tokio Contributors <team@tokio.rs>"]
 license = "MIT"
