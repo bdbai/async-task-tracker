@@ -30,13 +30,13 @@ use alloc::sync::Arc;
 use event_listener::{Event, EventListener};
 use pin_project_lite::pin_project;
 
-// TODO: remove dependency on tokio in documenation
-
 /// A task tracker used for waiting until tasks exit.
 ///
-/// This is usually used together with [`CancellationToken`] to implement [graceful shutdown]. The
-/// `CancellationToken` is used to signal to tasks that they should shut down, and the
-/// `TaskTracker` is used to wait for them to finish shutting down.
+/// This is usually used together with a cancellation token to implement [graceful shutdown]. The
+/// cancellation token is used to signal to tasks that they should shut down, and the
+/// `TaskTracker` is used to wait for them to finish shutting down. For tokio runtime, there is a
+/// [`CancellationToken`] in the `tokio-util` crate that can be used for this purpose. Otherwise,
+/// consider using an mpsc channel as a cancellation token.
 ///
 /// The `TaskTracker` will also keep track of a `closed` boolean. This is used to handle the case
 /// where the `TaskTracker` is empty, but we don't want to shut down yet. This means that the
@@ -46,123 +46,34 @@ use pin_project_lite::pin_project;
 ///  * The `TaskTracker` must be empty, that is, all tasks that it is tracking must have exited.
 ///
 /// When a call to [`wait`] returns, it is guaranteed that all tracked tasks have exited and that
-/// the destructor of the future has finished running. However, there might be a short amount of
-/// time where [`JoinHandle::is_finished`] returns false.
-///
-/// # Comparison to `JoinSet`
-///
-/// The main Tokio crate has a similar collection known as [`JoinSet`]. The `JoinSet` type has a
-/// lot more features than `TaskTracker`, so `TaskTracker` should only be used when one of its
-/// unique features is required:
-///
-///  1. When tasks exit, a `TaskTracker` will allow the task to immediately free its memory.
-///  2. By not closing the `TaskTracker`, [`wait`] will be prevented from returning even if
-///     the `TaskTracker` is empty.
-///  3. A `TaskTracker` does not require mutable access to insert tasks.
-///  4. A `TaskTracker` can be cloned to share it with many tasks.
-///
-/// The first point is the most important one. A [`JoinSet`] keeps track of the return value of
-/// every inserted task. This means that if the caller keeps inserting tasks and never calls
-/// [`join_next`], then their return values will keep building up and consuming memory, _even if_
-/// most of the tasks have already exited. This can cause the process to run out of memory. With a
-/// `TaskTracker`, this does not happen. Once tasks exit, they are immediately removed from the
-/// `TaskTracker`.
+/// the destructor of the future has finished running.
 ///
 /// # Examples
 ///
-/// For more examples, please see the topic page on [graceful shutdown].
-///
 /// ## Spawn tasks and wait for them to exit
 ///
-/// This is a simple example. For this case, [`JoinSet`] should probably be used instead.
-///
 /// ```
-/// use tokio_util::task::TaskTracker;
+/// use async_task_tracker::TaskTracker;
 ///
-/// #[tokio::main]
-/// async fn main() {
+/// async fn run() {
 ///     let tracker = TaskTracker::new();
 ///
 ///     for i in 0..10 {
-///         tracker.spawn(async move {
+///         my_runtime_spawn(tracker.track_future(async move {
 ///             println!("Task {} is running!", i);
-///         });
+///         }));
 ///     }
 ///     // Once we spawned everything, we close the tracker.
 ///     tracker.close();
-///
 ///     // Wait for everything to finish.
 ///     tracker.wait().await;
-///
 ///     println!("This is printed after all of the tasks.");
 /// }
+/// fn my_runtime_spawn(_fut: impl std::future::Future<Output = ()> + 'static) {}
 /// ```
 ///
-/// ## Wait for tasks to exit
-///
-/// This example shows the intended use-case of `TaskTracker`. It is used together with
-/// [`CancellationToken`] to implement graceful shutdown.
-/// ```
-/// use tokio_util::sync::CancellationToken;
-/// use tokio_util::task::TaskTracker;
-/// use tokio::time::{self, Duration};
-///
-/// async fn background_task(num: u64) {
-///     for i in 0..10 {
-///         time::sleep(Duration::from_millis(100*num)).await;
-///         println!("Background task {} in iteration {}.", num, i);
-///     }
-/// }
-///
-/// #[tokio::main]
-/// # async fn _hidden() {}
-/// # #[tokio::main(flavor = "current_thread", start_paused = true)]
-/// async fn main() {
-///     let tracker = TaskTracker::new();
-///     let token = CancellationToken::new();
-///
-///     for i in 0..10 {
-///         let token = token.clone();
-///         tracker.spawn(async move {
-///             // Use a `tokio::select!` to kill the background task if the token is
-///             // cancelled.
-///             tokio::select! {
-///                 () = background_task(i) => {
-///                     println!("Task {} exiting normally.", i);
-///                 },
-///                 () = token.cancelled() => {
-///                     // Do some cleanup before we really exit.
-///                     time::sleep(Duration::from_millis(50)).await;
-///                     println!("Task {} finished cleanup.", i);
-///                 },
-///             }
-///         });
-///     }
-///
-///     // Spawn a background task that will send the shutdown signal.
-///     {
-///         let tracker = tracker.clone();
-///         tokio::spawn(async move {
-///             // Normally you would use something like ctrl-c instead of
-///             // sleeping.
-///             time::sleep(Duration::from_secs(2)).await;
-///             tracker.close();
-///             token.cancel();
-///         });
-///     }
-///
-///     // Wait for all tasks to exit.
-///     tracker.wait().await;
-///
-///     println!("All tasks have exited now.");
-/// }
-/// ```
-///
-/// [`CancellationToken`]: tokio::sync::CancellationToken
-/// [`JoinHandle::is_finished`]: tokio::task::JoinHandle::is_finished
-/// [`JoinSet`]: tokio::task::JoinSet
+/// [`CancellationToken`]: https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html
 /// [`close`]: Self::close
-/// [`join_next`]: tokio::task::JoinSet::join_next
 /// [`wait`]: Self::wait
 /// [graceful shutdown]: https://tokio.rs/tokio/topics/shutdown
 pub struct TaskTracker {
@@ -385,38 +296,22 @@ impl TaskTracker {
     ///
     /// # Examples
     ///
-    /// Track a future spawned with [`tokio::spawn`].
+    /// Track a spawned future.
     ///
     /// ```
     /// # async fn my_async_fn() {}
-    /// use tokio_util::task::TaskTracker;
+    /// use async_task_tracker::TaskTracker;
     ///
-    /// # #[tokio::main(flavor = "current_thread")]
-    /// # async fn main() {
+    /// # async fn run() {
     /// let tracker = TaskTracker::new();
     ///
-    /// tokio::spawn(tracker.track_future(my_async_fn()));
+    /// my_runtime_spawn(tracker.track_future(my_async_fn()));
+    /// # fn my_runtime_spawn(_fut: impl std::future::Future<Output = ()> + 'static) {}
     /// # }
     /// ```
     ///
-    /// Track a future spawned on a [`JoinSet`].
-    /// ```
-    /// # async fn my_async_fn() {}
-    /// use tokio::task::JoinSet;
-    /// use tokio_util::task::TaskTracker;
-    ///
-    /// # #[tokio::main(flavor = "current_thread")]
-    /// # async fn main() {
-    /// let tracker = TaskTracker::new();
-    /// let mut join_set = JoinSet::new();
-    ///
-    /// join_set.spawn(tracker.track_future(my_async_fn()));
-    /// # }
-    /// ```
-    ///
-    /// [`JoinSet`]: tokio::task::JoinSet
     /// [`Poll::Pending`]: std::task::Poll::Pending
-    /// [`poll`]: std::future::Future::poll
+    /// [`poll`]: core::future::Future::poll
     /// [`wait`]: Self::wait
     #[inline]
     pub fn track_future<F: Future>(&self, future: F) -> TrackedFuture<F> {
@@ -448,7 +343,7 @@ impl TaskTracker {
     /// # Examples
     ///
     /// ```
-    /// use tokio_util::task::TaskTracker;
+    /// use async_task_tracker::TaskTracker;
     ///
     /// let tracker_1 = TaskTracker::new();
     /// let tracker_2 = TaskTracker::new();
@@ -483,21 +378,18 @@ impl Clone for TaskTracker {
     /// # Examples
     ///
     /// ```
-    /// use tokio_util::task::TaskTracker;
+    /// use async_task_tracker::TaskTracker;
     ///
-    /// #[tokio::main]
-    /// # async fn _hidden() {}
-    /// # #[tokio::main(flavor = "current_thread")]
-    /// async fn main() {
+    /// async fn run() {
     ///     let tracker = TaskTracker::new();
     ///     let cloned = tracker.clone();
     ///
     ///     // Spawns on `tracker` are visible in `cloned`.
-    ///     tracker.spawn(std::future::pending::<()>());
+    ///     my_runtime_spawn(tracker.track_future(std::future::pending::<()>()));
     ///     assert_eq!(cloned.len(), 1);
     ///
     ///     // Spawns on `cloned` are visible in `tracker`.
-    ///     cloned.spawn(std::future::pending::<()>());
+    ///     my_runtime_spawn(tracker.track_future(std::future::pending::<()>()));
     ///     assert_eq!(tracker.len(), 2);
     ///
     ///     // Calling `close` is visible to `cloned`.
@@ -508,6 +400,7 @@ impl Clone for TaskTracker {
     ///     cloned.reopen();
     ///     assert!(!tracker.is_closed());
     /// }
+    /// fn my_runtime_spawn(_fut: impl std::future::Future<Output = ()> + 'static) {}
     /// ```
     #[inline]
     fn clone(&self) -> TaskTracker {
