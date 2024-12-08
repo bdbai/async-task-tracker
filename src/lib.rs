@@ -285,7 +285,7 @@ impl TaskTrackerInner {
         // and those things will also be visible to anything woken by the call to `notify_waiters`.
         self.state.load(Ordering::Acquire);
 
-        self.on_last_exit.notify(1);
+        self.on_last_exit.notify(usize::MAX);
     }
 }
 
