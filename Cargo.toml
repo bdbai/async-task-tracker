@@ -1,6 +1,6 @@
 [package]
 name = "async-task-tracker"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 edition = "2021"
 authors = ["bdbai <bdbaiapp@163.com>", "Tokio Contributors <team@tokio.rs>"]
 license = "MIT"
@@ -22,5 +22,4 @@ tokio-test = "0.4"
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
-# it's necessar not be enabled, and the docs build will fail.
 rustc-args = ["--cfg", "docsrs"]
